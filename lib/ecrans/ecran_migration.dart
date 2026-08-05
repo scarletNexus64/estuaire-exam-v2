@@ -5,7 +5,7 @@ import '../data/magasin.dart';
 import '../data/modeles.dart';
 import '../widgets/communs.dart';
 
-/// Migration : fait passer une promotion au niveau supérieur.
+/// Migration : fait passer les étudiants d'une promotion à la suivante.
 class EcranMigration extends StatefulWidget {
   const EcranMigration({super.key});
 
@@ -14,10 +14,8 @@ class EcranMigration extends StatefulWidget {
 }
 
 class _EcranMigrationState extends State<EcranMigration> {
-  String? _specialiteId;
-  String? _niveauSourceId;
-  String? _niveauCibleId;
-  String? _salleCibleId;
+  String? _sourceId;
+  String? _cibleId;
   final Set<String> _selection = {};
 
   @override
@@ -26,10 +24,15 @@ class _EcranMigrationState extends State<EcranMigration> {
     return AnimatedBuilder(
       animation: m,
       builder: (context, _) {
-        final concernes = (_specialiteId != null && _niveauSourceId != null)
-            ? m.etudiantsDe(
-                specialiteId: _specialiteId, niveauId: _niveauSourceId)
-            : <Etudiant>[];
+        // Les promotions retenues ont pu être supprimées entre-temps.
+        if (_sourceId != null && m.niveau(_sourceId!) == null) {
+          _sourceId = null;
+          _cibleId = null;
+          _selection.clear();
+        }
+
+        final concernes =
+            _sourceId == null ? <Etudiant>[] : m.etudiantsDe(_sourceId!);
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -40,61 +43,59 @@ class _EcranMigrationState extends State<EcranMigration> {
                   'Faire passer les étudiants d\'une promotion au niveau supérieur.',
             ),
             Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(
-                    Espace.xxl, 0, Espace.xxl, Espace.xxl),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _EtapeSource(
-                      specialiteId: _specialiteId,
-                      niveauSourceId: _niveauSourceId,
-                      onSpecialite: (v) => setState(() {
-                        _specialiteId = v;
-                        _selection.clear();
-                      }),
-                      onNiveau: (v) => setState(() {
-                        _niveauSourceId = v;
-                        _niveauCibleId =
-                            v == null ? null : m.niveauSuivant(v)?.id;
-                        _selection.clear();
-                      }),
+              child: m.niveaux.isEmpty
+                  ? const Padding(
+                      padding: EdgeInsets.fromLTRB(
+                          Espace.xxl, 0, Espace.xxl, Espace.xxl),
+                      child: _AucunNiveau(),
+                    )
+                  : SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(
+                          Espace.xxl, 0, Espace.xxl, Espace.xxl),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _EtapeSource(
+                            sourceId: _sourceId,
+                            onSource: (v) => setState(() {
+                              _sourceId = v;
+                              _cibleId =
+                                  v == null ? null : m.niveauSuivant(v)?.id;
+                              _selection.clear();
+                            }),
+                          ),
+                          if (_sourceId != null) ...[
+                            const SizedBox(height: Espace.lg),
+                            _EtapeSelection(
+                              etudiants: concernes,
+                              selection: _selection,
+                              onBasculer: (id) => setState(() {
+                                _selection.contains(id)
+                                    ? _selection.remove(id)
+                                    : _selection.add(id);
+                              }),
+                              onTout: () => setState(() {
+                                if (_selection.length == concernes.length) {
+                                  _selection.clear();
+                                } else {
+                                  _selection
+                                    ..clear()
+                                    ..addAll(concernes.map((e) => e.id));
+                                }
+                              }),
+                            ),
+                            const SizedBox(height: Espace.lg),
+                            _EtapeDestination(
+                              sourceId: _sourceId!,
+                              cibleId: _cibleId,
+                              nbSelection: _selection.length,
+                              onCible: (v) => setState(() => _cibleId = v),
+                              onMigrer: () => _confirmer(context),
+                            ),
+                          ],
+                        ],
+                      ),
                     ),
-                    if (_specialiteId != null && _niveauSourceId != null) ...[
-                      const SizedBox(height: Espace.lg),
-                      _EtapeSelection(
-                        etudiants: concernes,
-                        selection: _selection,
-                        onBasculer: (id) => setState(() {
-                          _selection.contains(id)
-                              ? _selection.remove(id)
-                              : _selection.add(id);
-                        }),
-                        onTout: () => setState(() {
-                          if (_selection.length == concernes.length) {
-                            _selection.clear();
-                          } else {
-                            _selection
-                              ..clear()
-                              ..addAll(concernes.map((e) => e.id));
-                          }
-                        }),
-                      ),
-                      const SizedBox(height: Espace.lg),
-                      _EtapeDestination(
-                        niveauSourceId: _niveauSourceId!,
-                        niveauCibleId: _niveauCibleId,
-                        salleCibleId: _salleCibleId,
-                        nbSelection: _selection.length,
-                        onNiveauCible: (v) =>
-                            setState(() => _niveauCibleId = v),
-                        onSalleCible: (v) => setState(() => _salleCibleId = v),
-                        onMigrer: () => _confirmer(context),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
             ),
           ],
         );
@@ -104,31 +105,18 @@ class _EcranMigrationState extends State<EcranMigration> {
 
   Future<void> _confirmer(BuildContext context) async {
     final m = Magasin.instance;
-    final cible = m.niveau(_niveauCibleId!)!;
-    final source = m.niveau(_niveauSourceId!)!;
+    final source = m.nomNiveau(_sourceId!);
+    final cible = m.nomNiveau(_cibleId!);
 
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
         title: Text('Confirmer la migration',
             style: Theme.of(c).textTheme.titleLarge),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '${_selection.length} étudiant(s) passeront de '
-              '« ${source.intitule} » à « ${cible.intitule} ».',
-              style: Theme.of(c).textTheme.bodyMedium,
-            ),
-            if (_salleCibleId != null) ...[
-              const SizedBox(height: Espace.sm),
-              Text(
-                'Ils seront affectés à ${m.nomSalle(_salleCibleId)}.',
-                style: Theme.of(c).textTheme.bodySmall,
-              ),
-            ],
-          ],
+        content: Text(
+          '${_selection.length} étudiant(s) passeront de '
+          '« $source » à « $cible ».',
+          style: Theme.of(c).textTheme.bodyMedium,
         ),
         actions: [
           TextButton(
@@ -146,33 +134,33 @@ class _EcranMigrationState extends State<EcranMigration> {
     if (ok != true || !context.mounted) return;
 
     final nb = _selection.length;
-    m.migrer(_selection.toList(), _niveauCibleId!, _salleCibleId);
+    final migre = await executer(
+      context,
+      () => m.migrer(_selection.toList(), _cibleId!),
+      succes: '$nb étudiant(s) migré(s) vers $cible.',
+    );
+    if (!migre || !mounted) return;
+
     setState(() {
       _selection.clear();
-      _niveauSourceId = null;
-      _niveauCibleId = null;
-      _salleCibleId = null;
+      _sourceId = null;
+      _cibleId = null;
     });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$nb étudiant(s) migré(s) vers ${cible.intitule}.'),
-      ),
-    );
   }
 }
 
-class _Bloc extends StatelessWidget {
-  final String numero;
+/// Carte d'étape numérotée.
+class _Etape extends StatelessWidget {
+  final int numero;
   final String titre;
   final String description;
-  final Widget enfant;
+  final Widget contenu;
 
-  const _Bloc({
+  const _Etape({
     required this.numero,
     required this.titre,
     required this.description,
-    required this.enfant,
+    required this.contenu,
   });
 
   @override
@@ -185,7 +173,7 @@ class _Bloc extends StatelessWidget {
         border: Border.all(color: AppColors.bordure),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
@@ -193,35 +181,37 @@ class _Bloc extends StatelessWidget {
                 width: 24,
                 height: 24,
                 alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: AppColors.rougePale,
-                  borderRadius: BorderRadius.circular(12),
+                decoration: const BoxDecoration(
+                  color: AppColors.bleuPale,
+                  shape: BoxShape.circle,
                 ),
                 child: Text(
-                  numero,
+                  '$numero',
                   style: const TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
-                    color: AppColors.rouge,
+                    color: AppColors.bleuSombre,
                     fontFamily: 'Inter',
                   ),
                 ),
               ),
               const SizedBox(width: Espace.md),
-              Text(titre, style: Theme.of(context).textTheme.titleMedium),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(titre,
+                        style: Theme.of(context).textTheme.titleMedium),
+                    Text(description,
+                        style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ),
+              ),
             ],
           ),
-          const SizedBox(height: Espace.xs),
-          Padding(
-            padding: const EdgeInsets.only(left: 36),
-            child: Text(description,
-                style: Theme.of(context).textTheme.bodySmall),
-          ),
           const SizedBox(height: Espace.lg),
-          Padding(
-            padding: const EdgeInsets.only(left: 36),
-            child: enfant,
-          ),
+          contenu,
         ],
       ),
     );
@@ -229,53 +219,41 @@ class _Bloc extends StatelessWidget {
 }
 
 class _EtapeSource extends StatelessWidget {
-  final String? specialiteId;
-  final String? niveauSourceId;
-  final ValueChanged<String?> onSpecialite;
-  final ValueChanged<String?> onNiveau;
+  final String? sourceId;
+  final ValueChanged<String?> onSource;
 
-  const _EtapeSource({
-    required this.specialiteId,
-    required this.niveauSourceId,
-    required this.onSpecialite,
-    required this.onNiveau,
-  });
+  const _EtapeSource({required this.sourceId, required this.onSource});
 
   @override
   Widget build(BuildContext context) {
     final m = Magasin.instance;
-    return _Bloc(
-      numero: '1',
-      titre: 'Choisir la promotion',
-      description:
-          'Sélectionnez la spécialité et le niveau des étudiants à faire progresser.',
-      enfant: Row(
+    return _Etape(
+      numero: 1,
+      titre: 'Promotion de départ',
+      description: 'Choisissez la promotion dont les étudiants vont changer de niveau.',
+      contenu: Row(
         children: [
-          FiltreDeroulant<String?>(
-            etiquette: 'Spécialité',
-            valeur: specialiteId,
-            largeur: 260,
-            onChange: onSpecialite,
-            elements: [
-              const DropdownMenuItem(
-                  value: null, child: Text('Choisir…')),
-              for (final s in m.specialites)
-                DropdownMenuItem(value: s.id, child: Text(s.intitule)),
-            ],
+          SizedBox(
+            width: 340,
+            child: SelecteurCherchable<String>(
+              etiquette: 'Spécialité et niveau',
+              valeur: sourceId,
+              options: [
+                for (final n in m.niveauxTries)
+                  OptionSelecteur(
+                    valeur: n.id,
+                    libelle: m.nomNiveau(n.id),
+                    detail: '${m.effectifNiveau(n.id)} étudiant(s)',
+                  ),
+              ],
+              onChange: onSource,
+            ),
           ),
-          const SizedBox(width: Espace.md),
-          FiltreDeroulant<String?>(
-            etiquette: 'Niveau actuel',
-            valeur: niveauSourceId,
-            largeur: 200,
-            onChange: onNiveau,
-            elements: [
-              const DropdownMenuItem(
-                  value: null, child: Text('Choisir…')),
-              for (final n in m.niveauxTries)
-                DropdownMenuItem(value: n.id, child: Text(n.intitule)),
-            ],
-          ),
+          if (sourceId != null) ...[
+            const SizedBox(width: Espace.lg),
+            Text('${m.etudiantsDe(sourceId!).length} étudiant(s)',
+                style: Theme.of(context).textTheme.bodySmall),
+          ],
         ],
       ),
     );
@@ -297,43 +275,36 @@ class _EtapeSelection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final m = Magasin.instance;
     final tousChoisis =
         etudiants.isNotEmpty && selection.length == etudiants.length;
 
-    return _Bloc(
-      numero: '2',
-      titre: 'Sélectionner les étudiants',
-      description: etudiants.isEmpty
-          ? 'Aucun étudiant dans cette promotion.'
-          : 'Décochez ceux qui redoublent ou ne sont pas admis.',
-      enfant: etudiants.isEmpty
-          ? const SizedBox.shrink()
+    return _Etape(
+      numero: 2,
+      titre: 'Étudiants concernés',
+      description: '${selection.length} sélectionné(s) sur ${etudiants.length}.',
+      contenu: etudiants.isEmpty
+          ? Text('Cette promotion ne compte aucun étudiant.',
+              style: Theme.of(context).textTheme.bodySmall)
           : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Row(
-                  children: [
-                    TextButton.icon(
-                      onPressed: onTout,
-                      icon: Icon(
-                        tousChoisis
-                            ? Icons.check_box_outlined
-                            : Icons.check_box_outline_blank,
-                        size: 18,
-                      ),
-                      label: Text(tousChoisis
-                          ? 'Tout décocher'
-                          : 'Tout sélectionner'),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: onTout,
+                    icon: Icon(
+                      tousChoisis
+                          ? Icons.check_box_outlined
+                          : Icons.check_box_outline_blank,
+                      size: 18,
                     ),
-                    const Spacer(),
-                    Text('${selection.length} / ${etudiants.length} retenu(s)',
-                        style: Theme.of(context).textTheme.bodySmall),
-                  ],
+                    label: Text(
+                        tousChoisis ? 'Tout désélectionner' : 'Tout sélectionner'),
+                  ),
                 ),
                 const SizedBox(height: Espace.sm),
                 Container(
-                  constraints: const BoxConstraints(maxHeight: 260),
+                  constraints: const BoxConstraints(maxHeight: 280),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(rayonPetit),
                     border: Border.all(color: AppColors.bordure),
@@ -343,7 +314,7 @@ class _EtapeSelection extends StatelessWidget {
                     shrinkWrap: true,
                     itemCount: etudiants.length,
                     separatorBuilder: (_, _) => const Divider(height: 1),
-                    itemBuilder: (_, i) {
+                    itemBuilder: (context, i) {
                       final e = etudiants[i];
                       final choisi = selection.contains(e.id);
                       return InkWell(
@@ -356,38 +327,17 @@ class _EtapeSelection extends StatelessWidget {
                               Checkbox(
                                 value: choisi,
                                 onChanged: (_) => onBasculer(e.id),
-                                activeColor: AppColors.rouge,
+                                activeColor: AppColors.bleu,
                                 visualDensity: VisualDensity.compact,
                               ),
                               const SizedBox(width: Espace.sm),
                               SizedBox(
                                 width: 130,
-                                child: Text(
-                                  e.matricule,
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppColors.bleuSombre,
-                                    fontFamily: 'Inter',
-                                  ),
-                                ),
+                                child: cellule(e.matricule,
+                                    couleur: AppColors.bleuSombre, gras: true),
                               ),
-                              Expanded(
-                                child: Text(
-                                  e.nomComplet,
-                                  style: const TextStyle(
-                                      fontSize: 13.5,
-                                      fontFamily: 'Inter',
-                                      color: AppColors.texte),
-                                ),
-                              ),
-                              Text(
-                                m.nomSalle(e.salleId),
-                                style: const TextStyle(
-                                    fontSize: 12.5,
-                                    color: AppColors.texteDoux,
-                                    fontFamily: 'Inter'),
-                              ),
+                              Expanded(child: cellule(e.nomComplet)),
+                              if (!e.actif) Pastille.neutre('Inactif'),
                             ],
                           ),
                         ),
@@ -402,90 +352,104 @@ class _EtapeSelection extends StatelessWidget {
 }
 
 class _EtapeDestination extends StatelessWidget {
-  final String niveauSourceId;
-  final String? niveauCibleId;
-  final String? salleCibleId;
+  final String sourceId;
+  final String? cibleId;
   final int nbSelection;
-  final ValueChanged<String?> onNiveauCible;
-  final ValueChanged<String?> onSalleCible;
+  final ValueChanged<String?> onCible;
   final VoidCallback onMigrer;
 
   const _EtapeDestination({
-    required this.niveauSourceId,
-    required this.niveauCibleId,
-    required this.salleCibleId,
+    required this.sourceId,
+    required this.cibleId,
     required this.nbSelection,
-    required this.onNiveauCible,
-    required this.onSalleCible,
+    required this.onCible,
     required this.onMigrer,
   });
 
   @override
   Widget build(BuildContext context) {
     final m = Magasin.instance;
-    final suivant = m.niveauSuivant(niveauSourceId);
-    final pret = niveauCibleId != null && nbSelection > 0;
+    final source = m.niveau(sourceId);
+    // On ne propose que les autres promotions de la même spécialité.
+    final candidates = source == null
+        ? <Niveau>[]
+        : m.niveauxDe(source.specialiteId).where((n) => n.id != sourceId).toList();
 
-    return _Bloc(
-      numero: '3',
-      titre: 'Définir la destination',
-      description: suivant == null
-          ? 'Ce niveau est le dernier du cursus : choisissez la destination manuellement.'
-          : 'Le niveau suivant est proposé par défaut.',
-      enfant: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    final pret = cibleId != null && nbSelection > 0;
+
+    return _Etape(
+      numero: 3,
+      titre: 'Promotion d\'arrivée',
+      description: source?.palier.suivant == null
+          ? 'Cette promotion est au dernier palier du cursus.'
+          : 'Le niveau supérieur est proposé par défaut.',
+      contenu: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              FiltreDeroulant<String?>(
-                etiquette: 'Niveau de destination',
-                valeur: niveauCibleId,
-                largeur: 220,
-                onChange: onNiveauCible,
-                elements: [
-                  const DropdownMenuItem(
-                      value: null, child: Text('Choisir…')),
-                  for (final n in m.niveauxTries)
-                    if (n.id != niveauSourceId)
-                      DropdownMenuItem(value: n.id, child: Text(n.intitule)),
-                ],
-              ),
-              const SizedBox(width: Espace.md),
-              FiltreDeroulant<String?>(
-                etiquette: 'Salle (facultatif)',
-                valeur: salleCibleId,
-                largeur: 200,
-                onChange: onSalleCible,
-                elements: [
-                  const DropdownMenuItem(
-                      value: null, child: Text('Inchangée')),
-                  for (final s in m.salles)
-                    DropdownMenuItem(value: s.id, child: Text(s.nom)),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: Espace.xl),
-          Row(
-            children: [
-              FilledButton.icon(
-                onPressed: pret ? onMigrer : null,
-                icon: const Icon(Icons.arrow_forward, size: 18),
-                label: Text(nbSelection == 0
-                    ? 'Migrer'
-                    : 'Migrer $nbSelection étudiant(s)'),
-              ),
-              const SizedBox(width: Espace.md),
-              if (!pret)
-                Text(
-                  nbSelection == 0
-                      ? 'Sélectionnez au moins un étudiant.'
-                      : 'Choisissez un niveau de destination.',
-                  style: Theme.of(context).textTheme.bodySmall,
+          if (candidates.isEmpty)
+            Text(
+              'Aucune autre promotion n\'est ouverte pour cette spécialité. '
+              'Ouvrez le niveau supérieur depuis l\'écran « Niveaux ».',
+              style: Theme.of(context).textTheme.bodySmall,
+            )
+          else
+            Row(
+              children: [
+                SizedBox(
+                  width: 340,
+                  child: SelecteurCherchable<String>(
+                    etiquette: 'Niveau d\'arrivée',
+                    valeur: cibleId,
+                    options: [
+                      for (final n in candidates)
+                        OptionSelecteur(
+                          valeur: n.id,
+                          libelle: n.palier.libelleComplet,
+                          detail: '${m.effectifNiveau(n.id)} étudiant(s)',
+                        ),
+                    ],
+                    onChange: onCible,
+                  ),
                 ),
-            ],
-          ),
+                const Spacer(),
+                FilledButton.icon(
+                  onPressed: pret ? onMigrer : null,
+                  icon: const Icon(Icons.upgrade, size: 18),
+                  label: Text('Migrer $nbSelection étudiant(s)'),
+                ),
+              ],
+            ),
         ],
+      ),
+    );
+  }
+}
+
+class _AucunNiveau extends StatelessWidget {
+  const _AucunNiveau();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(rayon),
+        border: Border.all(color: AppColors.bordure),
+      ),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.stairs_outlined,
+                size: 32, color: AppColors.texteFaible),
+            const SizedBox(height: Espace.md),
+            Text('Ouvrez d\'abord un niveau',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: Espace.xs),
+            Text('La migration déplace les étudiants entre promotions.',
+                style: Theme.of(context).textTheme.bodySmall),
+          ],
+        ),
       ),
     );
   }

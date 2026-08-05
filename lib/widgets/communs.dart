@@ -2,6 +2,62 @@ import 'package:flutter/material.dart';
 
 import '../app/theme.dart';
 
+/// Exécute une écriture en base et signale l'échec à l'utilisateur.
+///
+/// Sans ça une contrainte violée ou un disque plein passerait inaperçu :
+/// la boîte de dialogue se fermerait comme si l'enregistrement avait réussi.
+Future<bool> executer(
+  BuildContext context,
+  Future<void> Function() action, {
+  String? succes,
+}) async {
+  final messager = ScaffoldMessenger.of(context);
+  try {
+    await action();
+    if (succes != null) {
+      messager.showSnackBar(SnackBar(content: Text(succes)));
+    }
+    return true;
+  } catch (e) {
+    messager.showSnackBar(
+      SnackBar(
+        backgroundColor: AppColors.danger,
+        content: Text('Enregistrement impossible : $e'),
+      ),
+    );
+    return false;
+  }
+}
+
+/// Logo de l'application.
+/// L'image ayant un fond clair, elle est posée sur une pastille blanche
+/// afin de rester lisible aussi bien sur fond clair que sur fond sombre.
+class LogoEstuaire extends StatelessWidget {
+  final double hauteur;
+
+  const LogoEstuaire({super.key, this.hauteur = 64});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: hauteur * 0.14,
+        vertical: hauteur * 0.10,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(rayon + 2),
+      ),
+      child: Image.asset(
+        'assets/images/logo.png',
+        height: hauteur,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.high,
+      ),
+    );
+  }
+}
+
 /// En-tête de page : titre, sous-titre, actions à droite.
 class EnTetePage extends StatelessWidget {
   final String titre;
@@ -183,6 +239,233 @@ class ChampRecherche extends StatelessWidget {
               size: 18, color: AppColors.texteFaible),
           prefixIconConstraints:
               const BoxConstraints(minWidth: 38, minHeight: 38),
+        ),
+      ),
+    );
+  }
+}
+
+/// Option d'un [SelecteurCherchable].
+class OptionSelecteur<T> {
+  final T valeur;
+  final String libelle;
+
+  /// Texte secondaire affiché sous le libellé (spécialité, rôle…).
+  final String? detail;
+
+  const OptionSelecteur({
+    required this.valeur,
+    required this.libelle,
+    this.detail,
+  });
+
+  bool correspond(String recherche) {
+    final q = recherche.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    return libelle.toLowerCase().contains(q) ||
+        (detail?.toLowerCase().contains(q) ?? false);
+  }
+}
+
+/// Liste déroulante avec champ de recherche.
+///
+/// Remplace `DropdownButtonFormField` dès que la liste peut devenir longue :
+/// dérouler cent promotions pour en trouver une n'est pas praticable.
+class SelecteurCherchable<T> extends StatelessWidget {
+  final String etiquette;
+  final T? valeur;
+  final List<OptionSelecteur<T>> options;
+  final ValueChanged<T> onChange;
+
+  /// Texte affiché quand rien n'est sélectionné.
+  final String indice;
+
+  const SelecteurCherchable({
+    super.key,
+    required this.etiquette,
+    required this.valeur,
+    required this.options,
+    required this.onChange,
+    this.indice = 'Choisir…',
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final choisie = options.where((o) => o.valeur == valeur).firstOrNull;
+
+    return InputDecorator(
+      decoration: InputDecoration(labelText: etiquette),
+      child: InkWell(
+        onTap: options.isEmpty ? null : () => _ouvrir(context),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                choisie?.libelle ?? indice,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13.5,
+                  fontFamily: 'Inter',
+                  color: choisie == null
+                      ? AppColors.texteFaible
+                      : AppColors.texte,
+                ),
+              ),
+            ),
+            const Icon(Icons.arrow_drop_down,
+                size: 22, color: AppColors.texteDoux),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _ouvrir(BuildContext context) async {
+    final choix = await showDialog<T>(
+      context: context,
+      builder: (c) => _DialogueSelecteur<T>(
+        titre: etiquette,
+        options: options,
+        valeur: valeur,
+      ),
+    );
+    // `null` = fermeture sans choisir : on ne touche pas à la valeur.
+    if (choix != null) onChange(choix);
+  }
+}
+
+class _DialogueSelecteur<T> extends StatefulWidget {
+  final String titre;
+  final List<OptionSelecteur<T>> options;
+  final T? valeur;
+
+  const _DialogueSelecteur({
+    required this.titre,
+    required this.options,
+    required this.valeur,
+  });
+
+  @override
+  State<_DialogueSelecteur<T>> createState() => _DialogueSelecteurState<T>();
+}
+
+class _DialogueSelecteurState<T> extends State<_DialogueSelecteur<T>> {
+  String _recherche = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final filtrees =
+        widget.options.where((o) => o.correspond(_recherche)).toList();
+
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 460, maxHeight: 520),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                  Espace.xl, Espace.xl, Espace.xl, Espace.md),
+              child: Text(widget.titre,
+                  style: Theme.of(context).textTheme.titleLarge),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                  Espace.xl, 0, Espace.xl, Espace.md),
+              child: TextField(
+                autofocus: true,
+                onChanged: (v) => setState(() => _recherche = v),
+                decoration: const InputDecoration(
+                  hintText: 'Rechercher…',
+                  prefixIcon: Icon(Icons.search,
+                      size: 18, color: AppColors.texteFaible),
+                  prefixIconConstraints:
+                      BoxConstraints(minWidth: 38, minHeight: 38),
+                ),
+              ),
+            ),
+            const Divider(height: 1),
+            Flexible(
+              child: filtrees.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.all(Espace.xxl),
+                      child: Center(
+                        child: Text('Aucun résultat.',
+                            style: Theme.of(context).textTheme.bodySmall),
+                      ),
+                    )
+                  : ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: filtrees.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (context, i) {
+                        final o = filtrees[i];
+                        final actif = o.valeur == widget.valeur;
+                        return InkWell(
+                          onTap: () => Navigator.pop(context, o.valeur),
+                          child: Container(
+                            color: actif
+                                ? AppColors.rougePale
+                                : Colors.transparent,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: Espace.xl, vertical: Espace.md),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        o.libelle,
+                                        style: TextStyle(
+                                          fontSize: 13.5,
+                                          fontFamily: 'Inter',
+                                          fontWeight: actif
+                                              ? FontWeight.w600
+                                              : FontWeight.w400,
+                                          color: actif
+                                              ? AppColors.rouge
+                                              : AppColors.texte,
+                                        ),
+                                      ),
+                                      if (o.detail != null)
+                                        Text(o.detail!,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodySmall),
+                                    ],
+                                  ),
+                                ),
+                                if (actif)
+                                  const Icon(Icons.check,
+                                      size: 17, color: AppColors.rouge),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.all(Espace.lg),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Text('${filtrees.length} élément(s)',
+                      style: Theme.of(context).textTheme.bodySmall),
+                  const Spacer(),
+                  OutlinedButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Annuler'),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

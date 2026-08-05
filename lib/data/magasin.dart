@@ -1,357 +1,430 @@
 import 'package:flutter/foundation.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'base_locale.dart';
+import 'magasin_campus.dart';
 import 'modeles.dart';
 
-/// Magasin en mémoire pour la phase UI/UX.
-/// Sera remplacé par la base locale à l'étape suivante.
+/// Magasin de la configuration académique, adossé à la base SQLite locale.
+///
+/// Les données tiennent en mémoire pour que l'interface reste synchrone ;
+/// chaque écriture est appliquée à la base puis répercutée sur le cache.
+/// Il faut appeler [charger] après l'ouverture de la base.
 class Magasin extends ChangeNotifier {
   static final Magasin instance = Magasin._();
-  Magasin._() {
-    _semer();
-  }
+  Magasin._();
 
-  final List<Filiere> filieres = [];
+  Database get _db => BaseLocale.instance.db;
+
   final List<Specialite> specialites = [];
   final List<Niveau> niveaux = [];
-  final List<Salle> salles = [];
   final List<Matiere> matieres = [];
   final List<Etudiant> etudiants = [];
 
-  int _sequence = 0;
-  String _id(String prefixe) => '$prefixe${(++_sequence).toString().padLeft(3, '0')}';
+  bool _charge = false;
+  bool get estCharge => _charge;
+
+  /// Recharge tout le cache depuis la base, **pour le campus actif**.
+  ///
+  /// Le filtrage se fait ici, à la source : ainsi aucun écran ne peut
+  /// afficher par mégarde les données d'un autre campus.
+  Future<void> charger() async {
+    final campusId = MagasinCampus.instance.actif?.id;
+
+    // Sans campus choisi, on ne charge rien plutôt que de tout mélanger.
+    if (campusId == null) {
+      specialites.clear();
+      niveaux.clear();
+      matieres.clear();
+      etudiants.clear();
+      _charge = false;
+      notifyListeners();
+      return;
+    }
+
+    final lignesSpecialites = await _db.query('specialite',
+        where: 'campus_id = ?',
+        whereArgs: [campusId],
+        orderBy: 'intitule COLLATE NOCASE');
+
+    final idsSpecialites =
+        lignesSpecialites.map((l) => l['id'] as String).toSet();
+
+    final lignesNiveaux = await _db.query('niveau');
+    final lignesMatieres =
+        await _db.query('matiere', orderBy: 'code COLLATE NOCASE');
+    final lignesEtudiants =
+        await _db.query('etudiant', orderBy: 'nom_complet COLLATE NOCASE');
+
+    specialites
+      ..clear()
+      ..addAll(lignesSpecialites.map((l) => Specialite(
+            id: l['id'] as String,
+            campusId: l['campus_id'] as String,
+            abreviation: l['abreviation'] as String,
+            intitule: l['intitule'] as String,
+            responsable: l['responsable'] as String,
+          )));
+
+    // Chaîne de rattachement : campus -> spécialité -> niveau -> matière
+    // et étudiant. On ne garde que ce qui remonte au campus actif.
+    niveaux
+      ..clear()
+      ..addAll(lignesNiveaux
+          .where((l) => idsSpecialites.contains(l['specialite_id'] as String))
+          .map((l) => Niveau(
+                id: l['id'] as String,
+                specialiteId: l['specialite_id'] as String,
+                palier: Palier.values[l['palier'] as int],
+              )));
+
+    final idsNiveaux = niveaux.map((n) => n.id).toSet();
+
+    matieres
+      ..clear()
+      ..addAll(lignesMatieres
+          .where((l) => idsNiveaux.contains(l['niveau_id'] as String))
+          .map((l) => Matiere(
+                id: l['id'] as String,
+                code: l['code'] as String,
+                intitule: l['intitule'] as String,
+                niveauId: l['niveau_id'] as String,
+                semestre: l['semestre'] as int,
+              )));
+
+    etudiants
+      ..clear()
+      ..addAll(lignesEtudiants
+          .where((l) => idsNiveaux.contains(l['niveau_id'] as String))
+          .map((l) => Etudiant(
+                id: l['id'] as String,
+                matricule: l['matricule'] as String,
+                nomComplet: l['nom_complet'] as String,
+                sexe: (l['sexe'] as String) == 'F' ? Sexe.f : Sexe.m,
+                niveauId: l['niveau_id'] as String,
+                actif: (l['actif'] as int) == 1,
+              )));
+
+    _charge = true;
+    notifyListeners();
+  }
+
+  /// Identifiant lisible et unique : préfixe + compteur au-delà de l'existant.
+  ///
+  /// Le tri porte sur la partie numérique : en ordre alphabétique
+  /// « MAT999 » passerait après « MAT1000 », et le compteur repartirait
+  /// à 1000 en heurtant un identifiant déjà pris.
+  Future<String> _id(String prefixe, String table) async {
+    final r = await _db.rawQuery(
+      'SELECT id FROM $table WHERE id LIKE ? '
+      'ORDER BY CAST(SUBSTR(id, ?) AS INTEGER) DESC LIMIT 1',
+      ['$prefixe%', prefixe.length + 1],
+    );
+    var suivant = 1;
+    if (r.isNotEmpty) {
+      final dernier = r.first['id'] as String;
+      suivant = (int.tryParse(dernier.substring(prefixe.length)) ?? 0) + 1;
+    }
+    return '$prefixe${suivant.toString().padLeft(3, '0')}';
+  }
 
   // ---------- Lectures utilitaires ----------
 
-  Filiere? filiere(String id) =>
-      filieres.where((f) => f.id == id).firstOrNull;
   Specialite? specialite(String id) =>
       specialites.where((s) => s.id == id).firstOrNull;
   Niveau? niveau(String id) => niveaux.where((n) => n.id == id).firstOrNull;
-  Salle? salle(String id) => salles.where((s) => s.id == id).firstOrNull;
 
-  String nomFiliere(String id) => filiere(id)?.intitule ?? '—';
   String nomSpecialite(String id) => specialite(id)?.intitule ?? '—';
-  String nomNiveau(String id) => niveau(id)?.intitule ?? '—';
-  String nomSalle(String? id) => id == null ? '—' : (salle(id)?.nom ?? '—');
 
-  List<Specialite> specialitesDe(String filiereId) =>
-      specialites.where((s) => s.filiereId == filiereId).toList();
+  /// Palier d'une promotion : « BTS 1 ».
+  String nomPalier(String niveauId) =>
+      niveau(niveauId)?.palier.abreviation ?? '—';
 
-  List<Niveau> get niveauxTries =>
-      [...niveaux]..sort((a, b) => a.rang.compareTo(b.rang));
+  /// Libellé complet d'une promotion : « Génie Logiciel — BTS 1 ».
+  String nomNiveau(String niveauId) {
+    final n = niveau(niveauId);
+    if (n == null) return '—';
+    return '${nomSpecialite(n.specialiteId)} — ${n.palier.abreviation}';
+  }
 
-  List<Etudiant> etudiantsDe({String? specialiteId, String? niveauId}) =>
-      etudiants
-          .where((e) =>
-              (specialiteId == null || e.specialiteId == specialiteId) &&
-              (niveauId == null || e.niveauId == niveauId))
-          .toList();
+  /// Promotions d'une spécialité, du palier le plus bas au plus élevé.
+  List<Niveau> niveauxDe(String specialiteId) =>
+      niveaux.where((n) => n.specialiteId == specialiteId).toList()
+        ..sort((a, b) => a.rang.compareTo(b.rang));
 
-  int effectifSpecialite(String id) =>
-      etudiants.where((e) => e.specialiteId == id && e.actif).length;
+  /// Toutes les promotions, groupées par spécialité puis par palier.
+  List<Niveau> get niveauxTries {
+    final ordre = {
+      for (var i = 0; i < specialites.length; i++) specialites[i].id: i
+    };
+    return [...niveaux]..sort((a, b) {
+        final parSpecialite = (ordre[a.specialiteId] ?? 999)
+            .compareTo(ordre[b.specialiteId] ?? 999);
+        return parSpecialite != 0 ? parSpecialite : a.rang.compareTo(b.rang);
+      });
+  }
 
-  int effectifNiveau(String id) =>
-      etudiants.where((e) => e.niveauId == id && e.actif).length;
+  /// Vrai si le palier est déjà ouvert pour cette spécialité.
+  bool niveauExiste(String specialiteId, Palier palier, {String? saufId}) =>
+      niveaux.any((n) =>
+          n.specialiteId == specialiteId &&
+          n.palier == palier &&
+          n.id != saufId);
 
-  int nbMatieresSpecialite(String id) =>
-      matieres.where((m) => m.specialiteId == id).length;
+  List<Etudiant> etudiantsDe(String niveauId) =>
+      etudiants.where((e) => e.niveauId == niveauId).toList();
 
-  /// Niveau immédiatement supérieur, ou null si c'est déjà le dernier.
+  int effectifNiveau(String niveauId) =>
+      etudiants.where((e) => e.niveauId == niveauId && e.actif).length;
+
+  int effectifSpecialite(String specialiteId) {
+    final ids = niveauxDe(specialiteId).map((n) => n.id).toSet();
+    return etudiants.where((e) => ids.contains(e.niveauId) && e.actif).length;
+  }
+
+  int nbMatieresNiveau(String niveauId) =>
+      matieres.where((m) => m.niveauId == niveauId).length;
+
+  int nbMatieresSpecialite(String specialiteId) {
+    final ids = niveauxDe(specialiteId).map((n) => n.id).toSet();
+    return matieres.where((m) => ids.contains(m.niveauId)).length;
+  }
+
+  /// Promotion suivante dans la même spécialité, ou null si le palier
+  /// supérieur n'est pas ouvert (ou n'existe pas).
   Niveau? niveauSuivant(String niveauId) {
     final actuel = niveau(niveauId);
-    if (actuel == null) return null;
-    final tries = niveauxTries;
-    for (final n in tries) {
-      if (n.rang > actuel.rang) return n;
+    final apres = actuel?.palier.suivant;
+    if (actuel == null || apres == null) return null;
+    return niveaux
+        .where(
+            (n) => n.specialiteId == actuel.specialiteId && n.palier == apres)
+        .firstOrNull;
+  }
+
+  // ---------- Spécialités ----------
+
+  Future<void> ajouterSpecialite(
+      String abreviation, String intitule, String responsable) async {
+    final campusId = MagasinCampus.instance.actif?.id;
+    if (campusId == null) {
+      throw StateError('Aucun campus sélectionné.');
     }
-    return null;
-  }
 
-  // ---------- Écritures ----------
-
-  void ajouterFiliere(String code, String intitule) {
-    filieres.add(Filiere(id: _id('FIL'), code: code, intitule: intitule));
-    notifyListeners();
-  }
-
-  void majFiliere(Filiere f, String code, String intitule) {
-    f.code = code;
-    f.intitule = intitule;
-    notifyListeners();
-  }
-
-  void supprimerFiliere(String id) {
-    filieres.removeWhere((f) => f.id == id);
-    notifyListeners();
-  }
-
-  void ajouterSpecialite(
-      String code, String intitule, String filiereId, String responsable) {
+    final id = await _id('SPE', 'specialite');
+    await _db.insert('specialite', {
+      'id': id,
+      'campus_id': campusId,
+      'abreviation': abreviation,
+      'intitule': intitule,
+      'responsable': responsable,
+    });
     specialites.add(Specialite(
-      id: _id('SPE'),
-      code: code,
+      id: id,
+      campusId: campusId,
+      abreviation: abreviation,
       intitule: intitule,
-      filiereId: filiereId,
       responsable: responsable,
     ));
+    _trierSpecialites();
     notifyListeners();
   }
 
-  void majSpecialite(Specialite s, String code, String intitule,
-      String filiereId, String responsable) {
-    s.code = code;
+  Future<void> majSpecialite(Specialite s, String abreviation, String intitule,
+      String responsable) async {
+    await _db.update(
+      'specialite',
+      {
+        'abreviation': abreviation,
+        'intitule': intitule,
+        'responsable': responsable,
+      },
+      where: 'id = ?',
+      whereArgs: [s.id],
+    );
+    s.abreviation = abreviation;
     s.intitule = intitule;
-    s.filiereId = filiereId;
     s.responsable = responsable;
+    _trierSpecialites();
     notifyListeners();
   }
 
-  void supprimerSpecialite(String id) {
+  /// Supprime la spécialité ; SQLite propage aux promotions, matières
+  /// et étudiants via ON DELETE CASCADE.
+  Future<void> supprimerSpecialite(String id) async {
+    await _db.delete('specialite', where: 'id = ?', whereArgs: [id]);
+
+    final promotions = niveauxDe(id).map((n) => n.id).toSet();
+    etudiants.removeWhere((e) => promotions.contains(e.niveauId));
+    matieres.removeWhere((m) => promotions.contains(m.niveauId));
+    niveaux.removeWhere((n) => n.specialiteId == id);
     specialites.removeWhere((s) => s.id == id);
     notifyListeners();
   }
 
-  void ajouterNiveau(String code, String intitule, int rang) {
-    niveaux.add(
-        Niveau(id: _id('NIV'), code: code, intitule: intitule, rang: rang));
+  void _trierSpecialites() => specialites
+      .sort((a, b) => a.intitule.toLowerCase().compareTo(b.intitule.toLowerCase()));
+
+  // ---------- Niveaux ----------
+
+  Future<void> ajouterNiveau(String specialiteId, Palier palier) async {
+    final id = await _id('NIV', 'niveau');
+    await _db.insert('niveau', {
+      'id': id,
+      'specialite_id': specialiteId,
+      'palier': palier.index,
+    });
+    niveaux.add(Niveau(id: id, specialiteId: specialiteId, palier: palier));
     notifyListeners();
   }
 
-  void majNiveau(Niveau n, String code, String intitule, int rang) {
-    n.code = code;
-    n.intitule = intitule;
-    n.rang = rang;
+  Future<void> majNiveau(Niveau n, String specialiteId, Palier palier) async {
+    await _db.update(
+      'niveau',
+      {'specialite_id': specialiteId, 'palier': palier.index},
+      where: 'id = ?',
+      whereArgs: [n.id],
+    );
+    n.specialiteId = specialiteId;
+    n.palier = palier;
     notifyListeners();
   }
 
-  void supprimerNiveau(String id) {
+  Future<void> supprimerNiveau(String id) async {
+    await _db.delete('niveau', where: 'id = ?', whereArgs: [id]);
+    etudiants.removeWhere((e) => e.niveauId == id);
+    matieres.removeWhere((m) => m.niveauId == id);
     niveaux.removeWhere((n) => n.id == id);
     notifyListeners();
   }
 
-  void ajouterSalle(String nom, String batiment, int capacite) {
-    salles.add(Salle(
-        id: _id('SAL'), nom: nom, batiment: batiment, capacite: capacite));
-    notifyListeners();
-  }
+  // ---------- Matières ----------
 
-  void majSalle(Salle s, String nom, String batiment, int capacite) {
-    s.nom = nom;
-    s.batiment = batiment;
-    s.capacite = capacite;
-    notifyListeners();
-  }
-
-  void supprimerSalle(String id) {
-    salles.removeWhere((s) => s.id == id);
-    notifyListeners();
-  }
-
-  void ajouterMatiere(String code, String intitule, String specialiteId,
-      String niveauId, int semestre, int credits) {
+  Future<void> ajouterMatiere(
+      String code, String intitule, String niveauId, int semestre) async {
+    final id = await _id('MAT', 'matiere');
+    await _db.insert('matiere', {
+      'id': id,
+      'code': code,
+      'intitule': intitule,
+      'niveau_id': niveauId,
+      'semestre': semestre,
+    });
     matieres.add(Matiere(
-      id: _id('MAT'),
+      id: id,
       code: code,
       intitule: intitule,
-      specialiteId: specialiteId,
       niveauId: niveauId,
       semestre: semestre,
-      credits: credits,
     ));
+    _trierMatieres();
     notifyListeners();
   }
 
-  void majMatiere(Matiere m, String code, String intitule, String specialiteId,
-      String niveauId, int semestre, int credits) {
+  Future<void> majMatiere(Matiere m, String code, String intitule,
+      String niveauId, int semestre) async {
+    await _db.update(
+      'matiere',
+      {
+        'code': code,
+        'intitule': intitule,
+        'niveau_id': niveauId,
+        'semestre': semestre,
+      },
+      where: 'id = ?',
+      whereArgs: [m.id],
+    );
     m.code = code;
     m.intitule = intitule;
-    m.specialiteId = specialiteId;
     m.niveauId = niveauId;
     m.semestre = semestre;
-    m.credits = credits;
+    _trierMatieres();
     notifyListeners();
   }
 
-  void supprimerMatiere(String id) {
+  Future<void> supprimerMatiere(String id) async {
+    await _db.delete('matiere', where: 'id = ?', whereArgs: [id]);
     matieres.removeWhere((m) => m.id == id);
     notifyListeners();
   }
 
-  void ajouterEtudiant(String matricule, String nom, Sexe sexe,
-      String specialiteId, String niveauId, String? salleId) {
+  void _trierMatieres() => matieres
+      .sort((a, b) => a.code.toLowerCase().compareTo(b.code.toLowerCase()));
+
+  // ---------- Étudiants ----------
+
+  Future<void> ajouterEtudiant(
+      String matricule, String nom, Sexe sexe, String niveauId) async {
+    final id = await _id('ETU', 'etudiant');
+    await _db.insert('etudiant', {
+      'id': id,
+      'matricule': matricule,
+      'nom_complet': nom,
+      'sexe': sexe.code,
+      'niveau_id': niveauId,
+      'actif': 1,
+    });
     etudiants.add(Etudiant(
-      id: _id('ETU'),
+      id: id,
       matricule: matricule,
       nomComplet: nom,
       sexe: sexe,
-      specialiteId: specialiteId,
       niveauId: niveauId,
-      salleId: salleId,
     ));
+    _trierEtudiants();
     notifyListeners();
   }
 
-  void majEtudiant(Etudiant e, String matricule, String nom, Sexe sexe,
-      String specialiteId, String niveauId, String? salleId, bool actif) {
+  Future<void> majEtudiant(Etudiant e, String matricule, String nom, Sexe sexe,
+      String niveauId, bool actif) async {
+    await _db.update(
+      'etudiant',
+      {
+        'matricule': matricule,
+        'nom_complet': nom,
+        'sexe': sexe.code,
+        'niveau_id': niveauId,
+        'actif': actif ? 1 : 0,
+      },
+      where: 'id = ?',
+      whereArgs: [e.id],
+    );
     e.matricule = matricule;
     e.nomComplet = nom;
     e.sexe = sexe;
-    e.specialiteId = specialiteId;
     e.niveauId = niveauId;
-    e.salleId = salleId;
     e.actif = actif;
+    _trierEtudiants();
     notifyListeners();
   }
 
-  void supprimerEtudiant(String id) {
+  Future<void> supprimerEtudiant(String id) async {
+    await _db.delete('etudiant', where: 'id = ?', whereArgs: [id]);
     etudiants.removeWhere((e) => e.id == id);
     notifyListeners();
   }
 
-  /// Migration : fait passer les étudiants au niveau supérieur.
-  void migrer(List<String> etudiantIds, String niveauCibleId, String? salleId) {
-    for (final e in etudiants) {
-      if (etudiantIds.contains(e.id)) {
-        e.niveauId = niveauCibleId;
-        if (salleId != null) e.salleId = salleId;
+  void _trierEtudiants() => etudiants.sort(
+      (a, b) => a.nomComplet.toLowerCase().compareTo(b.nomComplet.toLowerCase()));
+
+  /// Migration : fait passer les étudiants à la promotion cible,
+  /// en une seule transaction.
+  Future<void> migrer(List<String> etudiantIds, String niveauCibleId) async {
+    if (etudiantIds.isEmpty) return;
+
+    await _db.transaction((txn) async {
+      final lot = txn.batch();
+      for (final id in etudiantIds) {
+        lot.update('etudiant', {'niveau_id': niveauCibleId},
+            where: 'id = ?', whereArgs: [id]);
       }
+      await lot.commit(noResult: true);
+    });
+
+    final cibles = etudiantIds.toSet();
+    for (final e in etudiants) {
+      if (cibles.contains(e.id)) e.niveauId = niveauCibleId;
     }
     notifyListeners();
-  }
-
-  // ---------- Données de démonstration ----------
-
-  void _semer() {
-    final genie = Filiere(
-        id: _id('FIL'), code: 'GI', intitule: 'Génie Informatique');
-    final gestion =
-        Filiere(id: _id('FIL'), code: 'GE', intitule: 'Gestion');
-    filieres.addAll([genie, gestion]);
-
-    final gl = Specialite(
-      id: _id('SPE'),
-      code: 'GL',
-      intitule: 'Génie Logiciel',
-      filiereId: genie.id,
-      responsable: 'M. KUIMO',
-    );
-    final rs = Specialite(
-      id: _id('SPE'),
-      code: 'RS',
-      intitule: 'Réseaux et Sécurité',
-      filiereId: genie.id,
-      responsable: 'M. TCHOUA',
-    );
-    final cg = Specialite(
-      id: _id('SPE'),
-      code: 'CG',
-      intitule: 'Comptabilité et Gestion',
-      filiereId: gestion.id,
-      responsable: 'Mme NGOUNOU',
-    );
-    specialites.addAll([gl, rs, cg]);
-
-    final bts1 =
-        Niveau(id: _id('NIV'), code: 'BTS1', intitule: 'BTS 1', rang: 1);
-    final bts2 =
-        Niveau(id: _id('NIV'), code: 'BTS2', intitule: 'BTS 2', rang: 2);
-    final lic3 =
-        Niveau(id: _id('NIV'), code: 'LIC3', intitule: 'Licence 3', rang: 3);
-    niveaux.addAll([bts1, bts2, lic3]);
-
-    final a101 = Salle(
-        id: _id('SAL'), nom: 'Salle A101', batiment: 'Bâtiment A', capacite: 45);
-    final a102 = Salle(
-        id: _id('SAL'), nom: 'Salle A102', batiment: 'Bâtiment A', capacite: 40);
-    final b201 = Salle(
-        id: _id('SAL'), nom: 'Salle B201', batiment: 'Bâtiment B', capacite: 60);
-    salles.addAll([a101, a102, b201]);
-
-    matieres.addAll([
-      Matiere(
-        id: _id('MAT'),
-        code: 'RO1234',
-        intitule: 'Recherche Opérationnelle II',
-        specialiteId: gl.id,
-        niveauId: bts1.id,
-        semestre: 1,
-        credits: 4,
-      ),
-      Matiere(
-        id: _id('MAT'),
-        code: 'ALG201',
-        intitule: 'Algorithmique avancée',
-        specialiteId: gl.id,
-        niveauId: bts1.id,
-        semestre: 1,
-        credits: 5,
-      ),
-      Matiere(
-        id: _id('MAT'),
-        code: 'BDD210',
-        intitule: 'Bases de données',
-        specialiteId: gl.id,
-        niveauId: bts2.id,
-        semestre: 2,
-        credits: 4,
-      ),
-      Matiere(
-        id: _id('MAT'),
-        code: 'RES150',
-        intitule: 'Administration réseaux',
-        specialiteId: rs.id,
-        niveauId: bts1.id,
-        semestre: 1,
-        credits: 4,
-      ),
-      Matiere(
-        id: _id('MAT'),
-        code: 'CPT110',
-        intitule: 'Comptabilité générale',
-        specialiteId: cg.id,
-        niveauId: bts1.id,
-        semestre: 1,
-        credits: 3,
-      ),
-    ]);
-
-    const noms = [
-      ['Ange Tim', Sexe.f],
-      ['Bertrand Nkolo', Sexe.m],
-      ['Chantal Mbarga', Sexe.f],
-      ['David Fotso', Sexe.m],
-      ['Estelle Ndongo', Sexe.f],
-      ['Franck Talla', Sexe.m],
-      ['Gisèle Awono', Sexe.f],
-      ['Hervé Kamga', Sexe.m],
-      ['Irène Foning', Sexe.f],
-      ['Joseph Manga', Sexe.m],
-      ['Karine Ebode', Sexe.f],
-      ['Landry Sop', Sexe.m],
-    ];
-
-    final repartition = [
-      [gl.id, bts1.id, a101.id],
-      [gl.id, bts2.id, a102.id],
-      [rs.id, bts1.id, b201.id],
-      [cg.id, bts1.id, a101.id],
-    ];
-
-    var i = 0;
-    for (final r in repartition) {
-      for (var k = 0; k < 3; k++) {
-        final n = noms[i % noms.length];
-        etudiants.add(Etudiant(
-          id: _id('ETU'),
-          matricule: 'IUE26${(1000 + i * 7).toString()}',
-          nomComplet: n[0] as String,
-          sexe: n[1] as Sexe,
-          specialiteId: r[0],
-          niveauId: r[1],
-          salleId: r[2],
-        ));
-        i++;
-      }
-    }
   }
 }

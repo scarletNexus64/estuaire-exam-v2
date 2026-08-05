@@ -4,5 +4,15 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
+	<!-- Sans ces droits, le sélecteur de fichiers ne s'ouvre pas :
+	     export et import de la base seraient impossibles. -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+	<!-- Serveur d'épreuves : les étudiants s'y connectent depuis le réseau
+	     local. Sans ce droit en release, aucune connexion n'aboutit. -->
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
 </dict>
 </plist>

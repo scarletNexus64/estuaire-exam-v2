@@ -5,6 +5,8 @@ import '../data/magasin.dart';
 import '../data/modeles.dart';
 import '../widgets/communs.dart';
 
+/// Registre des étudiants, présenté par promotion.
+/// On choisit une carte « Spécialité — Niveau », puis on gère sa liste.
 class EcranEtudiants extends StatefulWidget {
   const EcranEtudiants({super.key});
 
@@ -13,9 +15,8 @@ class EcranEtudiants extends StatefulWidget {
 }
 
 class _EcranEtudiantsState extends State<EcranEtudiants> {
-  String _recherche = '';
-  String? _filtreSpecialite;
-  String? _filtreNiveau;
+  /// Promotion ouverte ; null = grille des promotions.
+  String? _niveauId;
 
   @override
   Widget build(BuildContext context) {
@@ -23,138 +24,320 @@ class _EcranEtudiantsState extends State<EcranEtudiants> {
     return AnimatedBuilder(
       animation: m,
       builder: (context, _) {
-        final liste = m.etudiants.where((e) {
-          final texte = '${e.matricule} ${e.nomComplet}'.toLowerCase();
-          return texte.contains(_recherche.toLowerCase()) &&
-              (_filtreSpecialite == null ||
-                  e.specialiteId == _filtreSpecialite) &&
-              (_filtreNiveau == null || e.niveauId == _filtreNiveau);
-        }).toList()
-          ..sort((a, b) => a.nomComplet.compareTo(b.nomComplet));
+        // La promotion a pu être supprimée entre-temps.
+        final niveau = _niveauId == null ? null : m.niveau(_niveauId!);
+        if (niveau == null) return _GrillePromotions(onOuvrir: _ouvrir);
+        return _ListePromotion(
+          niveau: niveau,
+          onRetour: () => setState(() => _niveauId = null),
+        );
+      },
+    );
+  }
 
-        final pretACreer = m.specialites.isNotEmpty && m.niveaux.isNotEmpty;
+  void _ouvrir(String niveauId) => setState(() => _niveauId = niveauId);
+}
 
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            EnTetePage(
-              titre: 'Étudiants',
-              sousTitre:
-                  'Registre des étudiants. Le matricule sert d\'identifiant lors des épreuves.',
-              actions: [
-                OutlinedButton.icon(
-                  onPressed: () => _messageBientot(context),
-                  icon: const Icon(Icons.file_upload_outlined, size: 18),
-                  label: const Text('Importer'),
+// ---------- Grille des promotions ----------
+
+class _GrillePromotions extends StatefulWidget {
+  final ValueChanged<String> onOuvrir;
+  const _GrillePromotions({required this.onOuvrir});
+
+  @override
+  State<_GrillePromotions> createState() => _GrillePromotionsState();
+}
+
+class _GrillePromotionsState extends State<_GrillePromotions> {
+  String _recherche = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final m = Magasin.instance;
+    final onOuvrir = widget.onOuvrir;
+    final q = _recherche.trim().toLowerCase();
+
+    // La recherche porte aussi sur les noms : après un import INSAM on
+    // cherche souvent un étudiant sans savoir dans quelle promotion il
+    // est inscrit.
+    final promotions = q.isEmpty
+        ? m.niveauxTries
+        : m.niveauxTries.where((n) {
+            final specialite = m.nomSpecialite(n.specialiteId).toLowerCase();
+            if (specialite.contains(q) ||
+                n.palier.abreviation.toLowerCase().contains(q)) {
+              return true;
+            }
+            return m.etudiantsDe(n.id).any((e) =>
+                e.nomComplet.toLowerCase().contains(q) ||
+                e.matricule.toLowerCase().contains(q));
+          }).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        EnTetePage(
+          titre: 'Étudiants',
+          sousTitre:
+              'Choisissez une promotion pour consulter et modifier sa liste d\'étudiants.',
+        ),
+        if (m.niveauxTries.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+                Espace.xxl, 0, Espace.xxl, Espace.lg),
+            child: Row(
+              children: [
+                ChampRecherche(
+                  indice: 'Promotion, nom ou matricule…',
+                  largeur: 340,
+                  onChange: (v) => setState(() => _recherche = v),
                 ),
-                FilledButton.icon(
-                  onPressed:
-                      pretACreer ? () => _ouvrirFormulaire(context) : null,
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('Nouvel étudiant'),
+                const SizedBox(width: Espace.lg),
+                Text(
+                  '${promotions.length} promotion(s)'
+                  '${q.isEmpty ? '' : ' sur ${m.niveauxTries.length}'}',
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                  Espace.xxl, 0, Espace.xxl, Espace.lg),
-              child: Row(
+          ),
+        Expanded(
+          child: Padding(
+            padding:
+                const EdgeInsets.fromLTRB(Espace.xxl, 0, Espace.xxl, Espace.xxl),
+            child: m.niveauxTries.isEmpty
+                ? const _AucunNiveau()
+                : promotions.isEmpty
+                ? const Center(child: Text('Aucune promotion ne correspond.'))
+                : GridView.builder(
+                    gridDelegate:
+                        const SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 320,
+                      mainAxisExtent: 152,
+                      crossAxisSpacing: Espace.lg,
+                      mainAxisSpacing: Espace.lg,
+                    ),
+                    itemCount: promotions.length,
+                    itemBuilder: (context, i) {
+                      final n = promotions[i];
+                      return _CartePromotion(
+                        specialite: m.nomSpecialite(n.specialiteId),
+                        palier: n.palier.abreviation,
+                        nbEtudiants: m.etudiantsDe(n.id).length,
+                        nbMatieres: m.nbMatieresNiveau(n.id),
+                        onOuvrir: () => onOuvrir(n.id),
+                      );
+                    },
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CartePromotion extends StatefulWidget {
+  final String specialite;
+  final String palier;
+  final int nbEtudiants;
+  final int nbMatieres;
+  final VoidCallback onOuvrir;
+
+  const _CartePromotion({
+    required this.specialite,
+    required this.palier,
+    required this.nbEtudiants,
+    required this.nbMatieres,
+    required this.onOuvrir,
+  });
+
+  @override
+  State<_CartePromotion> createState() => _CartePromotionState();
+}
+
+class _CartePromotionState extends State<_CartePromotion> {
+  bool _survol = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _survol = true),
+      onExit: (_) => setState(() => _survol = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onOuvrir,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          padding: const EdgeInsets.all(Espace.lg),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(rayon),
+            border: Border.all(
+                color: _survol ? AppColors.bleu : AppColors.bordure),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  ChampRecherche(
-                    indice: 'Rechercher par nom ou matricule…',
-                    largeur: 300,
-                    onChange: (v) => setState(() => _recherche = v),
-                  ),
-                  const SizedBox(width: Espace.md),
-                  FiltreDeroulant<String?>(
-                    etiquette: 'Spécialité',
-                    valeur: _filtreSpecialite,
-                    onChange: (v) => setState(() => _filtreSpecialite = v),
-                    elements: [
-                      const DropdownMenuItem(
-                          value: null, child: Text('Toutes')),
-                      for (final s in m.specialites)
-                        DropdownMenuItem(
-                            value: s.id, child: Text(s.intitule)),
-                    ],
-                  ),
-                  const SizedBox(width: Espace.md),
-                  FiltreDeroulant<String?>(
-                    etiquette: 'Niveau',
-                    valeur: _filtreNiveau,
-                    largeur: 150,
-                    onChange: (v) => setState(() => _filtreNiveau = v),
-                    elements: [
-                      const DropdownMenuItem(
-                          value: null, child: Text('Tous')),
-                      for (final n in m.niveauxTries)
-                        DropdownMenuItem(
-                            value: n.id, child: Text(n.intitule)),
-                    ],
-                  ),
+                  Pastille.bleue(widget.palier),
                   const Spacer(),
-                  Text('${liste.length} étudiant(s)',
+                  Icon(
+                    Icons.arrow_forward,
+                    size: 16,
+                    color: _survol ? AppColors.bleu : AppColors.texteFaible,
+                  ),
+                ],
+              ),
+              const SizedBox(height: Espace.md),
+              Text(
+                widget.specialite,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const Spacer(),
+              Row(
+                children: [
+                  const Icon(Icons.groups_outlined,
+                      size: 16, color: AppColors.texteFaible),
+                  const SizedBox(width: Espace.xs + 2),
+                  Text('${widget.nbEtudiants} étudiant(s)',
+                      style: Theme.of(context).textTheme.bodySmall),
+                  const SizedBox(width: Espace.md),
+                  const Icon(Icons.menu_book_outlined,
+                      size: 16, color: AppColors.texteFaible),
+                  const SizedBox(width: Espace.xs + 2),
+                  Text('${widget.nbMatieres}',
                       style: Theme.of(context).textTheme.bodySmall),
                 ],
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------- Liste d'une promotion ----------
+
+class _ListePromotion extends StatefulWidget {
+  final Niveau niveau;
+  final VoidCallback onRetour;
+
+  const _ListePromotion({required this.niveau, required this.onRetour});
+
+  @override
+  State<_ListePromotion> createState() => _ListePromotionState();
+}
+
+class _ListePromotionState extends State<_ListePromotion> {
+  static const _flex = <double>[1.6, 3, 0.8, 1.2, 1];
+
+  String _recherche = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final m = Magasin.instance;
+    final n = widget.niveau;
+
+    final liste = m.etudiantsDe(n.id).where((e) {
+      final texte = '${e.matricule} ${e.nomComplet}'.toLowerCase();
+      return texte.contains(_recherche.toLowerCase());
+    }).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        EnTetePage(
+          titre:
+              '${m.nomSpecialite(n.specialiteId)} — ${n.palier.abreviation}',
+          sousTitre:
+              'Registre de la promotion. Le matricule sert d\'identifiant lors des épreuves.',
+          actions: [
+            OutlinedButton.icon(
+              onPressed: widget.onRetour,
+              icon: const Icon(Icons.arrow_back, size: 18),
+              label: const Text('Promotions'),
             ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(
-                    Espace.xxl, 0, Espace.xxl, Espace.xxl),
-                child: Tableau(
-                  colonnes: const [
-                    'Matricule',
-                    'Noms et prénoms',
-                    'Sexe',
-                    'Spécialité',
-                    'Niveau',
-                    'Salle',
-                    'État',
-                    ''
-                  ],
-                  flex: const [1.6, 2.6, 0.7, 2, 1.2, 1.4, 1, 1],
-                  messageVide: 'Aucun étudiant ne correspond aux filtres.',
-                  lignes: [
-                    for (final e in liste)
-                      LigneTableau(
-                        flex: const [1.6, 2.6, 0.7, 2, 1.2, 1.4, 1, 1],
-                        cellules: [
-                          cellule(e.matricule,
-                              couleur: AppColors.bleuSombre, gras: true),
-                          cellule(e.nomComplet, gras: true),
-                          cellule(e.sexe.code),
-                          cellule(m.nomSpecialite(e.specialiteId),
-                              couleur: AppColors.texteDoux),
-                          cellule(m.nomNiveau(e.niveauId),
-                              couleur: AppColors.texteDoux),
-                          cellule(m.nomSalle(e.salleId),
-                              couleur: AppColors.texteDoux),
-                          e.actif
-                              ? Pastille.succes('Inscrit')
-                              : Pastille.neutre('Inactif'),
-                          ActionsLigne(
-                            onModifier: () =>
-                                _ouvrirFormulaire(context, etudiant: e),
-                            onSupprimer: () => _supprimer(context, e),
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
-              ),
+            OutlinedButton.icon(
+              onPressed: () => _messageBientot(context),
+              icon: const Icon(Icons.file_upload_outlined, size: 18),
+              label: const Text('Importer'),
+            ),
+            FilledButton.icon(
+              onPressed: () => _ouvrirFormulaire(context),
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Nouvel étudiant'),
             ),
           ],
-        );
-      },
+        ),
+        Padding(
+          padding:
+              const EdgeInsets.fromLTRB(Espace.xxl, 0, Espace.xxl, Espace.lg),
+          child: Row(
+            children: [
+              ChampRecherche(
+                indice: 'Rechercher par nom ou matricule…',
+                largeur: 300,
+                onChange: (v) => setState(() => _recherche = v),
+              ),
+              const Spacer(),
+              Text('${liste.length} étudiant(s)',
+                  style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Padding(
+            padding:
+                const EdgeInsets.fromLTRB(Espace.xxl, 0, Espace.xxl, Espace.xxl),
+            child: Tableau(
+              colonnes: const [
+                'Matricule',
+                'Noms et prénoms',
+                'Sexe',
+                'État',
+                ''
+              ],
+              flex: _flex,
+              messageVide: 'Aucun étudiant dans cette promotion.',
+              lignes: [
+                for (final e in liste)
+                  LigneTableau(
+                    flex: _flex,
+                    cellules: [
+                      cellule(e.matricule,
+                          couleur: AppColors.bleuSombre, gras: true),
+                      cellule(e.nomComplet, gras: true),
+                      cellule(e.sexe.code),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: e.actif
+                            ? Pastille.succes('Inscrit')
+                            : Pastille.neutre('Inactif'),
+                      ),
+                      ActionsLigne(
+                        onModifier: () =>
+                            _ouvrirFormulaire(context, etudiant: e),
+                        onSupprimer: () => _supprimer(context, e),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
   void _messageBientot(BuildContext context) {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text(
-            'L\'import de listes arrivera avec la base de données locale.'),
+        content:
+            Text('L\'import de listes arrivera avec la base de données locale.'),
       ),
     );
   }
@@ -163,10 +346,11 @@ class _EcranEtudiantsState extends State<EcranEtudiants> {
     final ok = await confirmerSuppression(
       context,
       titre: 'Supprimer l\'étudiant ?',
-      message:
-          '${e.nomComplet} (${e.matricule}) sera retiré du registre.',
+      message: '${e.nomComplet} (${e.matricule}) sera retiré du registre.',
     );
-    if (ok) Magasin.instance.supprimerEtudiant(e.id);
+    if (ok && context.mounted) {
+      await executer(context, () => Magasin.instance.supprimerEtudiant(e.id));
+    }
   }
 
   void _ouvrirFormulaire(BuildContext context, {Etudiant? etudiant}) {
@@ -174,17 +358,15 @@ class _EcranEtudiantsState extends State<EcranEtudiants> {
     final matricule = TextEditingController(text: etudiant?.matricule ?? '');
     final nom = TextEditingController(text: etudiant?.nomComplet ?? '');
     var sexe = etudiant?.sexe ?? Sexe.m;
-    var specialiteId = etudiant?.specialiteId ?? m.specialites.first.id;
-    var niveauId = etudiant?.niveauId ?? m.niveauxTries.first.id;
-    String? salleId = etudiant?.salleId;
+    // La promotion en cours est proposée par défaut, mais reste modifiable.
+    var niveauId = etudiant?.niveauId ?? widget.niveau.id;
     var actif = etudiant?.actif ?? true;
 
     showDialog(
       context: context,
       builder: (c) => StatefulBuilder(
         builder: (c, majEtat) => DialogueFormulaire(
-          titre:
-              etudiant == null ? 'Nouvel étudiant' : 'Modifier l\'étudiant',
+          titre: etudiant == null ? 'Nouvel étudiant' : 'Modifier l\'étudiant',
           largeur: 560,
           champs: [
             Row(
@@ -225,56 +407,18 @@ class _EcranEtudiantsState extends State<EcranEtudiants> {
                 hintText: 'Ange Tim',
               ),
             ),
-            DropdownButtonFormField<String>(
-              initialValue: specialiteId,
-              isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Spécialité'),
-              style: const TextStyle(
-                  fontSize: 13.5, color: AppColors.texte, fontFamily: 'Inter'),
-              items: [
-                for (final s in m.specialites)
-                  DropdownMenuItem(value: s.id, child: Text(s.intitule)),
-              ],
-              onChanged: (v) => majEtat(() => specialiteId = v!),
-            ),
-            Row(
-              children: [
-                Expanded(
-                  child: DropdownButtonFormField<String>(
-                    initialValue: niveauId,
-                    isExpanded: true,
-                    decoration: const InputDecoration(labelText: 'Niveau'),
-                    style: const TextStyle(
-                        fontSize: 13.5,
-                        color: AppColors.texte,
-                        fontFamily: 'Inter'),
-                    items: [
-                      for (final n in m.niveauxTries)
-                        DropdownMenuItem(value: n.id, child: Text(n.intitule)),
-                    ],
-                    onChanged: (v) => majEtat(() => niveauId = v!),
+            SelecteurCherchable<String>(
+              etiquette: 'Spécialité et niveau',
+              valeur: niveauId,
+              options: [
+                for (final p in m.niveauxTries)
+                  OptionSelecteur(
+                    valeur: p.id,
+                    libelle: m.nomNiveau(p.id),
+                    detail: p.palier.libelle,
                   ),
-                ),
-                const SizedBox(width: Espace.md),
-                Expanded(
-                  child: DropdownButtonFormField<String?>(
-                    initialValue: salleId,
-                    isExpanded: true,
-                    decoration: const InputDecoration(labelText: 'Salle'),
-                    style: const TextStyle(
-                        fontSize: 13.5,
-                        color: AppColors.texte,
-                        fontFamily: 'Inter'),
-                    items: [
-                      const DropdownMenuItem(
-                          value: null, child: Text('Non affectée')),
-                      for (final s in m.salles)
-                        DropdownMenuItem(value: s.id, child: Text(s.nom)),
-                    ],
-                    onChanged: (v) => majEtat(() => salleId = v),
-                  ),
-                ),
               ],
+              onChange: (v) => majEtat(() => niveauId = v),
             ),
             if (etudiant != null)
               SwitchListTile(
@@ -287,26 +431,58 @@ class _EcranEtudiantsState extends State<EcranEtudiants> {
                       ? 'Peut composer les épreuves.'
                       : 'Exclu des listes d\'épreuve.',
                   style: const TextStyle(
-                      fontSize: 12, color: AppColors.texteDoux,
+                      fontSize: 12,
+                      color: AppColors.texteDoux,
                       fontFamily: 'Inter'),
                 ),
                 contentPadding: EdgeInsets.zero,
                 activeThumbColor: AppColors.succes,
               ),
           ],
-          onEnregistrer: () {
+          onEnregistrer: () async {
             if (matricule.text.trim().isEmpty || nom.text.trim().isEmpty) {
               return;
             }
-            if (etudiant == null) {
-              m.ajouterEtudiant(matricule.text.trim(), nom.text.trim(), sexe,
-                  specialiteId, niveauId, salleId);
-            } else {
-              m.majEtudiant(etudiant, matricule.text.trim(), nom.text.trim(),
-                  sexe, specialiteId, niveauId, salleId, actif);
-            }
-            Navigator.pop(c);
+            final ok = await executer(
+              c,
+              () => etudiant == null
+                  ? m.ajouterEtudiant(
+                      matricule.text.trim(), nom.text.trim(), sexe, niveauId)
+                  : m.majEtudiant(etudiant, matricule.text.trim(),
+                      nom.text.trim(), sexe, niveauId, actif),
+            );
+            if (ok && c.mounted) Navigator.pop(c);
           },
+        ),
+      ),
+    );
+  }
+}
+
+class _AucunNiveau extends StatelessWidget {
+  const _AucunNiveau();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(rayon),
+        border: Border.all(color: AppColors.bordure),
+      ),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.stairs_outlined,
+                size: 32, color: AppColors.texteFaible),
+            const SizedBox(height: Espace.md),
+            Text('Ouvrez d\'abord un niveau',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: Espace.xs),
+            Text('Les étudiants sont inscrits dans une promotion.',
+                style: Theme.of(context).textTheme.bodySmall),
+          ],
         ),
       ),
     );

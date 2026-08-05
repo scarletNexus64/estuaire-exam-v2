@@ -59,9 +59,9 @@ class EcranSynthese extends StatelessWidget {
                           couleur: AppColors.succes,
                         ),
                         Statistique(
-                          valeur: '${m.salles.length}',
-                          libelle: 'Salles de classe',
-                          icone: Icons.meeting_room_outlined,
+                          valeur: '${m.niveaux.length}',
+                          libelle: 'Niveaux ouverts',
+                          icone: Icons.stairs_outlined,
                           couleur: AppColors.alerte,
                         ),
                       ],
@@ -114,7 +114,7 @@ class _RepartitionNiveaux extends StatelessWidget {
         children: [
           for (final n in niveaux) ...[
             _Barre(
-              etiquette: n.intitule,
+              etiquette: m.nomNiveau(n.id),
               valeur: m.effectifNiveau(n.id),
               total: total,
               couleur: AppColors.bleu,

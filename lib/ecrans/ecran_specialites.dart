@@ -13,8 +13,9 @@ class EcranSpecialites extends StatefulWidget {
 }
 
 class _EcranSpecialitesState extends State<EcranSpecialites> {
+  static const _flex = <double>[1, 2.8, 2, 1.6, 1, 1];
+
   String _recherche = '';
-  String? _filtreFiliere;
 
   @override
   Widget build(BuildContext context) {
@@ -23,11 +24,9 @@ class _EcranSpecialitesState extends State<EcranSpecialites> {
       animation: m,
       builder: (context, _) {
         final liste = m.specialites.where((s) {
-          final texte = '${s.code} ${s.intitule} ${s.responsable}'.toLowerCase();
-          final okRecherche = texte.contains(_recherche.toLowerCase());
-          final okFiliere =
-              _filtreFiliere == null || s.filiereId == _filtreFiliere;
-          return okRecherche && okFiliere;
+          final texte =
+              '${s.abreviation} ${s.intitule} ${s.responsable}'.toLowerCase();
+          return texte.contains(_recherche.toLowerCase());
         }).toList();
 
         return Column(
@@ -36,12 +35,10 @@ class _EcranSpecialitesState extends State<EcranSpecialites> {
             EnTetePage(
               titre: 'Spécialités',
               sousTitre:
-                  'Parcours de formation rattachés à une filière, avec leur responsable.',
+                  'Parcours de formation proposés par l\'établissement, avec leur responsable.',
               actions: [
                 FilledButton.icon(
-                  onPressed: m.filieres.isEmpty
-                      ? null
-                      : () => _ouvrirFormulaire(context),
+                  onPressed: () => _ouvrirFormulaire(context),
                   icon: const Icon(Icons.add, size: 18),
                   label: const Text('Nouvelle spécialité'),
                 ),
@@ -56,19 +53,6 @@ class _EcranSpecialitesState extends State<EcranSpecialites> {
                     indice: 'Rechercher une spécialité…',
                     onChange: (v) => setState(() => _recherche = v),
                   ),
-                  const SizedBox(width: Espace.md),
-                  FiltreDeroulant<String?>(
-                    etiquette: 'Filière',
-                    valeur: _filtreFiliere,
-                    onChange: (v) => setState(() => _filtreFiliere = v),
-                    elements: [
-                      const DropdownMenuItem(
-                          value: null, child: Text('Toutes')),
-                      for (final f in m.filieres)
-                        DropdownMenuItem(
-                            value: f.id, child: Text(f.intitule)),
-                    ],
-                  ),
                   const Spacer(),
                   Text('${liste.length} spécialité(s)',
                       style: Theme.of(context).textTheme.bodySmall),
@@ -79,42 +63,40 @@ class _EcranSpecialitesState extends State<EcranSpecialites> {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(
                     Espace.xxl, 0, Espace.xxl, Espace.xxl),
-                child: m.filieres.isEmpty
-                    ? _MessageAucuneFiliere()
-                    : Tableau(
-                        colonnes: const [
-                          'Code',
-                          'Intitulé',
-                          'Filière',
-                          'Responsable',
-                          'Matières',
-                          'Effectif',
-                          ''
-                        ],
-                        flex: const [0.9, 2.6, 1.8, 1.8, 1, 1, 1],
-                        messageVide: 'Aucune spécialité ne correspond.',
-                        lignes: [
-                          for (final s in liste)
-                            LigneTableau(
-                              flex: const [0.9, 2.6, 1.8, 1.8, 1, 1, 1],
-                              cellules: [
-                                Pastille.rouge(s.code),
-                                cellule(s.intitule, gras: true),
-                                cellule(m.nomFiliere(s.filiereId),
-                                    couleur: AppColors.texteDoux),
-                                cellule(s.responsable,
-                                    couleur: AppColors.texteDoux),
-                                cellule('${m.nbMatieresSpecialite(s.id)}'),
-                                cellule('${m.effectifSpecialite(s.id)}'),
-                                ActionsLigne(
-                                  onModifier: () => _ouvrirFormulaire(context,
-                                      specialite: s),
-                                  onSupprimer: () => _supprimer(context, s),
-                                ),
-                              ],
-                            ),
+                child: Tableau(
+                  colonnes: const [
+                    'Abrév.',
+                    'Intitulé',
+                    'Responsable',
+                    'Niveaux ouverts',
+                    'Matières',
+                    ''
+                  ],
+                  flex: _flex,
+                  messageVide: 'Aucune spécialité ne correspond.',
+                  lignes: [
+                    for (final s in liste)
+                      LigneTableau(
+                        flex: _flex,
+                        cellules: [
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Pastille.rouge(s.abreviation),
+                          ),
+                          cellule(s.intitule, gras: true),
+                          cellule(s.responsable,
+                              couleur: AppColors.texteDoux),
+                          _Paliers(niveaux: m.niveauxDe(s.id)),
+                          cellule('${m.nbMatieresSpecialite(s.id)}'),
+                          ActionsLigne(
+                            onModifier: () =>
+                                _ouvrirFormulaire(context, specialite: s),
+                            onSupprimer: () => _supprimer(context, s),
+                          ),
                         ],
                       ),
+                  ],
+                ),
               ),
             ),
           ],
@@ -126,108 +108,93 @@ class _EcranSpecialitesState extends State<EcranSpecialites> {
   Future<void> _supprimer(BuildContext context, Specialite s) async {
     final m = Magasin.instance;
     final nb = m.effectifSpecialite(s.id);
+    final nbNiveaux = m.niveauxDe(s.id).length;
+
     final ok = await confirmerSuppression(
       context,
       titre: 'Supprimer la spécialité ?',
-      message: nb > 0
-          ? '« ${s.intitule} » compte $nb étudiant(s) inscrit(s).'
+      message: nb > 0 || nbNiveaux > 0
+          ? '« ${s.intitule} » sera supprimée, ainsi que ses $nbNiveaux niveau(x) et ses $nb étudiant(s).'
           : '« ${s.intitule} » sera définitivement supprimée.',
     );
-    if (ok) m.supprimerSpecialite(s.id);
+    if (ok && context.mounted) {
+      await executer(context, () => m.supprimerSpecialite(s.id));
+    }
   }
 
   void _ouvrirFormulaire(BuildContext context, {Specialite? specialite}) {
     final m = Magasin.instance;
-    final code = TextEditingController(text: specialite?.code ?? '');
+    final abreviation =
+        TextEditingController(text: specialite?.abreviation ?? '');
     final intitule = TextEditingController(text: specialite?.intitule ?? '');
     final responsable =
         TextEditingController(text: specialite?.responsable ?? '');
-    var filiereId = specialite?.filiereId ?? m.filieres.first.id;
 
     showDialog(
       context: context,
-      builder: (c) => StatefulBuilder(
-        builder: (c, majEtat) => DialogueFormulaire(
-          titre: specialite == null
-              ? 'Nouvelle spécialité'
-              : 'Modifier la spécialité',
-          champs: [
-            TextField(
-              controller: code,
-              decoration: const InputDecoration(
-                  labelText: 'Code', hintText: 'GL'),
-              textCapitalization: TextCapitalization.characters,
+      builder: (c) => DialogueFormulaire(
+        titre: specialite == null
+            ? 'Nouvelle spécialité'
+            : 'Modifier la spécialité',
+        champs: [
+          TextField(
+            controller: abreviation,
+            decoration: const InputDecoration(
+                labelText: 'Abréviation', hintText: 'GL'),
+            textCapitalization: TextCapitalization.characters,
+          ),
+          TextField(
+            controller: intitule,
+            decoration: const InputDecoration(
+                labelText: 'Intitulé', hintText: 'Génie Logiciel'),
+          ),
+          TextField(
+            controller: responsable,
+            decoration: const InputDecoration(
+              labelText: 'Responsable de la spécialité',
+              hintText: 'M. KUIMO',
             ),
-            TextField(
-              controller: intitule,
-              decoration: const InputDecoration(
-                  labelText: 'Intitulé', hintText: 'Génie Logiciel'),
-            ),
-            DropdownButtonFormField<String>(
-              initialValue: filiereId,
-              isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Filière'),
-              style: const TextStyle(
-                  fontSize: 13.5,
-                  color: AppColors.texte,
-                  fontFamily: 'Inter'),
-              items: [
-                for (final f in m.filieres)
-                  DropdownMenuItem(value: f.id, child: Text(f.intitule)),
-              ],
-              onChanged: (v) => majEtat(() => filiereId = v!),
-            ),
-            TextField(
-              controller: responsable,
-              decoration: const InputDecoration(
-                labelText: 'Responsable de la spécialité',
-                hintText: 'M. KUIMO',
-              ),
-            ),
-          ],
-          onEnregistrer: () {
-            if (code.text.trim().isEmpty || intitule.text.trim().isEmpty) {
-              return;
-            }
-            if (specialite == null) {
-              m.ajouterSpecialite(code.text.trim(), intitule.text.trim(),
-                  filiereId, responsable.text.trim());
-            } else {
-              m.majSpecialite(specialite, code.text.trim(),
-                  intitule.text.trim(), filiereId, responsable.text.trim());
-            }
-            Navigator.pop(c);
-          },
-        ),
+          ),
+        ],
+        onEnregistrer: () async {
+          if (abreviation.text.trim().isEmpty ||
+              intitule.text.trim().isEmpty) {
+            return;
+          }
+          final ok = await executer(
+            c,
+            () => specialite == null
+                ? m.ajouterSpecialite(abreviation.text.trim(),
+                    intitule.text.trim(), responsable.text.trim())
+                : m.majSpecialite(specialite, abreviation.text.trim(),
+                    intitule.text.trim(), responsable.text.trim()),
+          );
+          if (ok && c.mounted) Navigator.pop(c);
+        },
       ),
     );
   }
 }
 
-class _MessageAucuneFiliere extends StatelessWidget {
+/// Paliers ouverts pour une spécialité, sous forme de pastilles.
+class _Paliers extends StatelessWidget {
+  final List<Niveau> niveaux;
+  const _Paliers({required this.niveaux});
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(rayon),
-        border: Border.all(color: AppColors.bordure),
-      ),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.account_tree_outlined,
-                size: 32, color: AppColors.texteFaible),
-            const SizedBox(height: Espace.md),
-            Text('Créez d\'abord une filière',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: Espace.xs),
-            Text('Chaque spécialité doit être rattachée à une filière.',
-                style: Theme.of(context).textTheme.bodySmall),
-          ],
-        ),
-      ),
+    if (niveaux.isEmpty) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: Pastille.neutre('Aucun'),
+      );
+    }
+    return Wrap(
+      spacing: Espace.xs,
+      runSpacing: Espace.xs,
+      children: [
+        for (final n in niveaux) Pastille.bleue(n.palier.abreviation),
+      ],
     );
   }
 }
