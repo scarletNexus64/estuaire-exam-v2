@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "cm.insam" "\0"
-            VALUE "FileDescription", "estuaire_examen" "\0"
+            VALUE "CompanyName", "INSAM" "\0"
+            VALUE "FileDescription", "Estuaire Examen" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "estuaire_examen" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 cm.insam. All rights reserved." "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 INSAM. All rights reserved." "\0"
             VALUE "OriginalFilename", "estuaire_examen.exe" "\0"
-            VALUE "ProductName", "estuaire_examen" "\0"
+            VALUE "ProductName", "Estuaire Examen" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

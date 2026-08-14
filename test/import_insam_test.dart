@@ -160,6 +160,32 @@ void main() {
         reason: 'les promotions du soir doivent rester séparées');
   }, timeout: const Timeout(Duration(minutes: 5)));
 
+  test('une matière inscrite deux fois au programme n\'entre qu\'une fois',
+      () async {
+    // `appartenir` répète parfois la même matière dans une promotion :
+    // sans regroupement, elle serait créée en double chez nous.
+    await MagasinInsam.instance.importerAnnee(
+      idAnnee: 4,
+      campusIds: {'CMP001'},
+      sansEtudiants: const {},
+    );
+
+    // Le doublon se mesure sur l'identifiant INSAM, pas sur le code : un
+    // module regroupe légitimement plusieurs matières sous le même code.
+    final db = BaseLocale.instance.db;
+    final doublons = await db.rawQuery('''
+      SELECT COUNT(*) c FROM (
+        SELECT m.niveau_id, ci.id_distant
+          FROM matiere m
+          JOIN correspondance_insam ci
+            ON ci.id_local = m.id AND ci.entite = 'matiere'
+         GROUP BY m.niveau_id, ci.id_distant
+        HAVING COUNT(*) > 1)
+    ''');
+    expect(doublons.first['c'], 0,
+        reason: 'aucune matière ne doit figurer deux fois dans une promotion');
+  }, timeout: const Timeout(Duration(minutes: 5)));
+
   test('les matières portent le code du module INSAM', () async {
     final promo = await promotionTemoin();
     await MagasinInsam.instance.importerPromotion(promo,

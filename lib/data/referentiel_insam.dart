@@ -285,15 +285,21 @@ class ReferentielInsam {
   /// BDS et SDA — donc plusieurs matières partagent le même code, et
   /// c'est normal.
   Future<List<MatiereInsam>> matieres(PromotionInsam promo) async {
+    // GROUP BY sur la matière : `appartenir` inscrit parfois deux fois la
+    // même matière au programme d'une promotion, ce qui la ferait entrer
+    // en double chez nous. On retient alors le premier semestre trouvé.
     final lignes = await _base.rawQuery('''
       SELECT m.id_matiere,
-             COALESCE(mo.code_module, ap.code_matiere) AS code_matiere,
-             m.intitule_matiere, ap.semestre_matiere
+             COALESCE(MIN(mo.code_module), MIN(ap.code_matiere))
+               AS code_matiere,
+             m.intitule_matiere,
+             MIN(ap.semestre_matiere) AS semestre_matiere
         FROM appartenir ap
         JOIN matiere m ON m.id_matiere = ap.id_matiere
         LEFT JOIN module mo ON mo.id_module = ap.id_module
        WHERE ap.id_specialite = ? AND ap.id_annee = ?
-       ORDER BY ap.semestre_matiere, m.intitule_matiere COLLATE NOCASE
+       GROUP BY m.id_matiere
+       ORDER BY semestre_matiere, m.intitule_matiere COLLATE NOCASE
     ''', [promo.idSpecialite, promo.idAnnee]);
 
     return lignes
